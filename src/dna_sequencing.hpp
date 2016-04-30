@@ -111,7 +111,7 @@ private:
 					++i;
 				}
 			}
-			result[k] = std::make_pair(dp[k][0], i + 1);
+			result[k] = std::make_pair(dp[k][0], i);
 		}
 		return result;
 	}
@@ -163,9 +163,10 @@ private:
 							head_scores[ii].first + tail_scores[jj].first;
 						const int interval =
 							tpos - (hpos - ii + head_scores[ii].second);
-						const int base = sw_score * 10 + abs(300 - interval);
+						const int base = sw_score * 100 + abs(300 - interval);
 						const double score = 1.0 / base;
-						if(solution.confidence() < base){
+						if(solution.confidence() < score){
+							solution.chromatid_id(std::get<0>(hranges[i]));
 							if(!is_strand){
 								solution.positions(0) = Solution::Position(
 									hpos, hpos - ii + head_scores[ii].second, false);
@@ -237,6 +238,9 @@ public:
 		std::vector<std::string> read_sequence)
 	{
 		std::vector<Solution> result(n / 2);
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
 		for(int i = 0; i < n; i += 2){
 			if(i % 100 == 0){ std::cout << i << " / " << n << std::endl; }
 			const Query q(read_sequence[i], read_sequence[i + 1]);

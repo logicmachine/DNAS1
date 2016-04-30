@@ -39,8 +39,8 @@ static std::pair<bool, Solution> verify_solution(
 {
 	const auto& ex = problem.expected_solutions()[read_id];
 	const auto& ac = read_solution(actual[0], actual[1]);
-	bool fail = false;
-	for(int j = 0; j < 2; ++j){
+	bool fail = (ex.chromatid_id() != ac.chromatid_id());
+	for(int j = 0; !fail && j < 2; ++j){
 		const auto e = ex.positions(j);
 		const auto a = ac.positions(j);
 		const int d = abs(static_cast<int>(e.start - a.start));
@@ -81,6 +81,86 @@ static double compute_auc(std::vector<std::pair<double, int>> results){
 		auc += cumul_si[i] * (lfi1 - lfi) * inv_n;
 	}
 	return auc;
+}
+
+static std::tuple<int, std::string, std::string> smith_waterman(
+	const std::string& a,
+	const std::string& b,
+	int ws, int wi, int wd)
+{
+	const int INF = 1000000000;
+	const int n = a.size(), m = b.size();
+	std::vector<std::vector<int>> dp(n + 1, std::vector<int>(m + 1, INF));
+	dp[0][0] = 0;
+	for(int i = 1; i <= n; ++i){ dp[i][0] = dp[i - 1][0] + wd; }
+	for(int j = 1; j <= m; ++j){ dp[0][j] = dp[0][j - 1] + wi; }
+	for(int i = 1; i <= n; ++i){
+		for(int j = 1; j <= m; ++j){
+			const int x = std::min(dp[i - 1][j] + wi, dp[i][j - 1] + wd);
+			dp[i][j] = std::min(
+				x, dp[i - 1][j - 1] + (a[i - 1] != b[j - 1] ? ws : 0));
+		}
+	}
+	std::vector<char> aa, bb;
+	int i = n, j = m;
+	while(i > 0 && j > 0){
+		if(i == 0){
+			aa.push_back('-');
+			bb.push_back(b[--j]);
+		}else if(j == 0){
+			aa.push_back(a[--i]);
+			bb.push_back('-');
+		}else{
+			const int x = dp[i - 1][j], y = dp[i][j - 1], z = dp[i - 1][j - 1];
+			if(x < y && x < z){
+				aa.push_back(a[--i]);
+				bb.push_back('-');
+			}else if(y < x && y < z){
+				aa.push_back('-');
+				bb.push_back(b[--j]);
+			}else if(a[i - 1] != b[j - 1]){
+				aa.push_back(tolower(a[--i]));
+				bb.push_back(tolower(b[--j]));
+			}else{
+				aa.push_back(a[--i]);
+				bb.push_back(b[--j]);
+			}
+		}
+	}
+	std::reverse(aa.begin(), aa.end());
+	std::reverse(bb.begin(), bb.end());
+	aa.push_back('\0');
+	bb.push_back('\0');
+	return std::tuple<int, std::string, std::string>(dp[n][m], aa.data(), bb.data());
+}
+
+static std::string subchromatid(
+	const Problem& problem,
+	int chromatid_id,
+	const Solution::Position& pos)
+{
+	std::ostringstream oss;
+	for(const auto& raw : problem.chromatids()){
+		if(raw.first != chromatid_id){ continue; }
+		const int t = raw.second[0].size();
+		for(auto i = pos.start - 1; i != pos.end; ++i){
+			oss << raw.second[i / t][i % t];
+		}
+	}
+	return oss.str();
+}
+
+static std::string reverse_complement(std::string s){
+	std::reverse(s.begin(), s.end());
+	for(char& c : s){
+		switch(c){
+			case 'A': c = 'T'; break;
+			case 'T': c = 'A'; break;
+			case 'C': c = 'G'; break;
+			case 'G': c = 'C'; break;
+		}
+	}
+	return s;
 }
 
 static int print_scores(
@@ -172,11 +252,25 @@ int main(int argc, char *argv[]){
 		const auto p = verify_solution(problem, i / 2, actual);
 		if(p.first){
 			const auto& ex = problem.expected_solutions()[i / 2];
-			std::cout << "(" << read_names[0] << ", " << read_names[1] << ")" << std::endl;
+			const auto ac = read_solution(actual[0], actual[1]);
+			std::cout << "(" << read_names[0] << ", " << read_names[1] << ") => "
+			          << ac.confidence() << std::endl;
 			for(int j = 0; j < 2; ++j){
-				const auto& pos = ex.positions(j);
-				std::cout << "  + " << pos.start << ", " << pos.end << ", " << pos.is_reversed << std::endl;
-				std::cout << "  - " << actual[j] << std::endl;
+				const auto& pe = ex.positions(j);
+				const auto& pa = ac.positions(j);
+				const auto& seq = read_sequences[j];
+				const auto sub_ex = subchromatid(problem, ex.chromatid_id(), pe);
+				const auto sub_ac = subchromatid(problem, ac.chromatid_id(), pa);
+				const auto sw_ex = smith_waterman(
+					sub_ex, pe.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
+				const auto sw_ac = smith_waterman(
+					sub_ac, pa.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
+				std::cout << "  + " << pe.start << ", " << pe.end << ", " << pe.is_reversed << std::endl;
+				std::cout << "    " << std::get<1>(sw_ex) << std::endl;
+				std::cout << "    " << std::get<2>(sw_ex) << std::endl;
+				std::cout << "  - " << pa.start << ", " << pa.end << ", " << pa.is_reversed << std::endl;
+				std::cout << "    " << std::get<1>(sw_ac) << std::endl;
+				std::cout << "    " << std::get<2>(sw_ac) << std::endl;
 			}
 		}
 	}
