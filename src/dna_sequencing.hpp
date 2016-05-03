@@ -18,8 +18,8 @@ private:
 
 	static const int INVALID_BASE = 255u;
 	static const int BLOCK_SIZE = 32;
-	static const int RANGE_PREFIX_LENGTH = 20;
-	static const int RANGE_MAXSIZE = 200;
+	static const int RANGE_PREFIX_LENGTH = 2;
+	static const int RANGE_MAXSIZE = 180;
 	static const int MIN_INTERVAL = 200;
 	static const int MAX_INTERVAL = 500;
 
@@ -116,8 +116,21 @@ private:
 		return result;
 	}
 
+	double compute_confidence(double align, double delta) const {
+		const double inv_vcm[2][2] = {
+			{  1.0,                  -0.003784544765752076 },
+			{ -0.003784544765752076,  1.0                  }
+		};
+		align = align / 7.799925841261347;
+		delta = (delta - 300.1853710156314) / 133.77059238237817;
+		const double t0 = align * inv_vcm[0][0] + delta * inv_vcm[1][0];
+		const double t1 = align * inv_vcm[0][1] + delta * inv_vcm[1][1];
+		return sqrt(t0 * align + t1 * delta);
+	}
+
 	void solve_pair(
 		Solution& solution,
+		std::priority_queue<double, std::vector<double>, std::greater<double>>& pq,
 		const std::vector<uint8_t>& head,
 		const std::vector<uint8_t>& tail,
 		bool is_strand) const
@@ -155,6 +168,8 @@ private:
 				const auto tail_scores = smith_waterman(tail_substr, tail);
 				const int hlen = head_scores.size();
 				const int tlen = tail_scores.size();
+				double best_score = 0;
+				Solution::Position best_hpos, best_tpos;
 				for(int ii = 0; ii < hlen; ++ii){
 					for(int jj = 0; jj < tlen; ++jj){
 						const int hpos = std::get<1>(hranges[i]) + ii;
@@ -163,26 +178,33 @@ private:
 							head_scores[ii].first + tail_scores[jj].first;
 						const int interval =
 							tpos - (hpos - ii + head_scores[ii].second);
-						const int base = sw_score * 100 + abs(300 - interval);
-						const double score = 1.0 / base;
-						if(solution.confidence() < score){
-							solution.chromatid_id(std::get<0>(hranges[i]));
-							if(!is_strand){
-								solution.positions(0) = Solution::Position(
-									hpos, hpos - ii + head_scores[ii].second, false);
-								solution.positions(1) = Solution::Position(
-									tpos, tpos - jj + tail_scores[jj].second, true);
-							}else{
-								solution.positions(0) = Solution::Position(
-									tpos, tpos - jj + tail_scores[jj].second, true);
-								solution.positions(1) = Solution::Position(
-									hpos, hpos - ii + head_scores[ii].second, false);
-							}
-							solution.confidence(score);
+						const double score = 1.0 / compute_confidence(sw_score, interval);
+						if(score >= best_score){
+							best_score = score;
+							best_hpos = Solution::Position(
+								hpos, hpos - ii + head_scores[ii].second, false);
+							best_tpos = Solution::Position(
+								tpos, tpos - jj + tail_scores[jj].second, true);
 						}
 					}
 				}
-				//std::cout << "+";
+				if(pq.size() < 32 || pq.top() < best_score){
+					pq.push(best_score);
+					if(pq.size() > 32){ pq.pop(); }
+				}
+				if(solution.confidence() < best_score){
+					const auto hpos = best_hpos;
+					const auto tpos = best_tpos;
+					solution.chromatid_id(std::get<0>(hranges[i]));
+					if(!is_strand){
+						solution.positions(0) = hpos;
+						solution.positions(1) = tpos;
+					}else{
+						solution.positions(0) = tpos;
+						solution.positions(1) = hpos;
+					}
+					solution.confidence(best_score);
+				}
 				++k;
 			}
 		}
@@ -190,8 +212,15 @@ private:
 
 	Solution solve(const Query& query) const {
 		Solution solution;
-		solve_pair(solution, query.fragments(0), query.rev_fragments(1), false);
-		solve_pair(solution, query.fragments(1), query.rev_fragments(0), true);
+		std::priority_queue<double, std::vector<double>, std::greater<double>> pq;
+		solve_pair(solution, pq, query.fragments(0), query.rev_fragments(1), false);
+		solve_pair(solution, pq, query.fragments(1), query.rev_fragments(0), true);
+		double sum = 0;
+		while(!pq.empty()){
+			sum += pq.top();
+			pq.pop();
+		}
+		solution.confidence(solution.confidence() / sum);
 		//std::cout << std::endl;
 		return solution;
 	}
@@ -239,10 +268,12 @@ public:
 	{
 		std::vector<Solution> result(n / 2);
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic)
 #endif
 		for(int i = 0; i < n; i += 2){
+#ifndef RUN_ONE_BY_ONE
 			if(i % 100 == 0){ std::cout << i << " / " << n << std::endl; }
+#endif
 			const Query q(read_sequence[i], read_sequence[i + 1]);
 			result[i / 2] = solve(q);
 		}

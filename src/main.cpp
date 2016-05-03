@@ -38,7 +38,7 @@ static std::pair<bool, Solution> verify_solution(
 	const std::vector<std::string>& actual)
 {
 	const auto& ex = problem.expected_solutions()[read_id];
-	const auto& ac = read_solution(actual[0], actual[1]);
+	auto ac = read_solution(actual[0], actual[1]);
 	bool fail = (ex.chromatid_id() != ac.chromatid_id());
 	for(int j = 0; !fail && j < 2; ++j){
 		const auto e = ex.positions(j);
@@ -163,6 +163,45 @@ static std::string reverse_complement(std::string s){
 	return s;
 }
 
+static void dump_solution_info(
+	const Problem& problem,
+	const std::vector<std::string>& read_names,
+	const std::vector<std::string>& read_sequences,
+	const Solution& ex,
+	const Solution& ac)
+{
+	std::cout << "(" << read_names[0] << ", " << read_names[1] << ") => "
+	          << ac.confidence() << std::endl;
+	for(int j = 0; j < 2; ++j){
+		const auto& pe = ex.positions(j);
+		const auto& pa = ac.positions(j);
+		const auto& seq = read_sequences[j];
+		const auto sub_ex = subchromatid(problem, ex.chromatid_id(), pe);
+		const auto sub_ac = subchromatid(problem, ac.chromatid_id(), pa);
+		if(sub_ex == sub_ac){
+			std::cout << "    (same subchromatid)" << std::endl;
+		}
+		const auto sw_ex = smith_waterman(
+			sub_ex, pe.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
+		const auto sw_ac = smith_waterman(
+			sub_ac, pa.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
+		std::cout << "  + " << pe.start << ", " << pe.end << ", " << pe.is_reversed << std::endl;
+		std::cout << "    " << std::get<1>(sw_ex) << std::endl;
+		std::cout << "    " << std::get<2>(sw_ex) << std::endl;
+		std::cout << "  - " << pa.start << ", " << pa.end << ", " << pa.is_reversed << std::endl;
+		std::cout << "    " << std::get<1>(sw_ac) << std::endl;
+		std::cout << "    " << std::get<2>(sw_ac) << std::endl;
+		std::cout << "  ? " << std::get<0>(sw_ex) << " / " << std::get<0>(sw_ac) << std::endl;
+	}
+	const int de = std::min<int>(
+		abs(ex.positions(0).start - ex.positions(1).end),
+		abs(ex.positions(1).start - ex.positions(0).end));
+	const int da = std::min<int>(
+		abs(ac.positions(0).start - ac.positions(1).end),
+		abs(ac.positions(1).start - ac.positions(0).end));
+	std::cout << "  D " << de << " / " << da << std::endl;
+}
+
 static int print_scores(
 	const Problem& problem,
 	const std::vector<std::string>& actual,
@@ -172,6 +211,7 @@ static int print_scores(
 	std::cout << "## Incorrect Answers" << std::endl;
 	const auto& expected = problem.expected_solutions();
 	std::vector<std::pair<double, int>> verify_results;
+	std::vector<std::pair<double, int>> ordered_results;
 	std::size_t correct_count = 0, confident_count = 0;
 	for(std::size_t i = 0; i < expected.size(); ++i){
 		const auto p = verify_solution(
@@ -186,9 +226,24 @@ static int print_scores(
 			verify_results.emplace_back(ac.confidence(), 0);
 			verify_results.emplace_back(ac.confidence(), 0);
 		}
+		ordered_results.emplace_back(ac.confidence(), i);
 	}
-	std::cout << std::endl;
 	std::sort(verify_results.begin(), verify_results.end());
+	std::sort(ordered_results.begin(), ordered_results.end());
+	for(std::size_t i = 0; i < ordered_results.size(); ++i){
+		const auto j = ordered_results[i].second;
+		const auto p = verify_solution(
+			problem, j, { actual[j * 2], actual[j * 2 + 1] });
+		if(p.first){
+			dump_solution_info(
+				problem,
+				{ problem.read_names()[j * 2], problem.read_names()[j * 2 + 1] },
+				{ problem.read_sequences()[j * 2], problem.read_sequences()[j * 2 + 1] },
+				problem.expected_solutions()[j],
+				read_solution(actual[j * 2], actual[j * 2 + 1]));
+			std::cout << "    (" << i << " / " << ordered_results.size() << ")" << std::endl;
+		}
+	}
 
 	const double auc = compute_auc(verify_results);
 	const double accuracy = log(1 - std::min(auc, MAX_AUC)) / problem.norm_a();
@@ -235,6 +290,9 @@ int main(int argc, char *argv[]){
 #ifdef RUN_ONE_BY_ONE
 	const auto n = problem.read_names().size();
 	for(std::size_t i = 0; i < n; i += 2){
+		if(argc == 3){
+			i = (atoi(argv[2]) - 1) * 2;
+		}
 		const std::vector<std::string> read_names = {
 			problem.read_names()[i + 0],
 			problem.read_names()[i + 1]
@@ -251,28 +309,12 @@ int main(int argc, char *argv[]){
 			read_sequences);
 		const auto p = verify_solution(problem, i / 2, actual);
 		if(p.first){
-			const auto& ex = problem.expected_solutions()[i / 2];
-			const auto ac = read_solution(actual[0], actual[1]);
-			std::cout << "(" << read_names[0] << ", " << read_names[1] << ") => "
-			          << ac.confidence() << std::endl;
-			for(int j = 0; j < 2; ++j){
-				const auto& pe = ex.positions(j);
-				const auto& pa = ac.positions(j);
-				const auto& seq = read_sequences[j];
-				const auto sub_ex = subchromatid(problem, ex.chromatid_id(), pe);
-				const auto sub_ac = subchromatid(problem, ac.chromatid_id(), pa);
-				const auto sw_ex = smith_waterman(
-					sub_ex, pe.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
-				const auto sw_ac = smith_waterman(
-					sub_ac, pa.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
-				std::cout << "  + " << pe.start << ", " << pe.end << ", " << pe.is_reversed << std::endl;
-				std::cout << "    " << std::get<1>(sw_ex) << std::endl;
-				std::cout << "    " << std::get<2>(sw_ex) << std::endl;
-				std::cout << "  - " << pa.start << ", " << pa.end << ", " << pa.is_reversed << std::endl;
-				std::cout << "    " << std::get<1>(sw_ac) << std::endl;
-				std::cout << "    " << std::get<2>(sw_ac) << std::endl;
-			}
+			dump_solution_info(
+				problem, read_names, read_sequences,
+				problem.expected_solutions()[i / 2],
+				read_solution(actual[0], actual[1]));
 		}
+		if(argc == 3){ break; }
 	}
 #else
 	const auto align_begin_time = std::chrono::steady_clock::now();
