@@ -66,7 +66,7 @@ public:
 				}
 			}
 			written += PADDING_LENGTH;
-			written += 32u - (total_length & 31u);
+			written += 32u - (written & 31u);
 		}
 	}
 
