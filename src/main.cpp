@@ -135,17 +135,13 @@ static std::tuple<int, std::string, std::string> smith_waterman(
 }
 
 static std::string subchromatid(
-	const Problem& problem,
+	const std::array<std::string, 25>& references,
 	int chromatid_id,
 	const Solution::Position& pos)
 {
 	std::ostringstream oss;
-	for(const auto& raw : problem.chromatids()){
-		if(raw.first != chromatid_id){ continue; }
-		const int t = raw.second[0].size();
-		for(auto i = pos.start - 1; i != pos.end; ++i){
-			oss << raw.second[i / t][i % t];
-		}
+	for(auto i = pos.start - 1; i != pos.end; ++i){
+		oss << references[chromatid_id][i];
 	}
 	return oss.str();
 }
@@ -165,6 +161,7 @@ static std::string reverse_complement(std::string s){
 
 static void dump_solution_info(
 	const Problem& problem,
+	const std::array<std::string, 25>& references,
 	const std::vector<std::string>& read_names,
 	const std::vector<std::string>& read_sequences,
 	const Solution& ex,
@@ -176,8 +173,8 @@ static void dump_solution_info(
 		const auto& pe = ex.positions(j);
 		const auto& pa = ac.positions(j);
 		const auto& seq = read_sequences[j];
-		const auto sub_ex = subchromatid(problem, ex.chromatid_id(), pe);
-		const auto sub_ac = subchromatid(problem, ac.chromatid_id(), pa);
+		const auto sub_ex = subchromatid(references, ex.chromatid_id(), pe);
+		const auto sub_ac = subchromatid(references, ac.chromatid_id(), pa);
 		if(sub_ex == sub_ac){
 			std::cout << "    (same subchromatid)" << std::endl;
 		}
@@ -204,6 +201,7 @@ static void dump_solution_info(
 
 static int print_scores(
 	const Problem& problem,
+	const std::array<std::string, 25>& references,
 	const std::vector<std::string>& actual,
 	double preprocess_time,
 	double align_time)
@@ -237,6 +235,7 @@ static int print_scores(
 		if(p.first){
 			dump_solution_info(
 				problem,
+				references,
 				{ problem.read_names()[j * 2], problem.read_names()[j * 2 + 1] },
 				{ problem.read_sequences()[j * 2], problem.read_sequences()[j * 2 + 1] },
 				problem.expected_solutions()[j],
@@ -289,10 +288,16 @@ int main(int argc, char *argv[]){
 
 #ifdef RUN_ONE_BY_ONE
 	const auto n = problem.read_names().size();
-	for(std::size_t i = 0; i < n; i += 2){
-		if(argc == 3){
-			i = (atoi(argv[2]) - 1) * 2;
-		}
+	std::array<std::string, 25> references;
+	for(const auto& p : problem.chromatids()){
+		std::ostringstream oss;
+		for(const auto& s : p.second){ oss << s; }
+		references[p.first] = oss.str();
+	}
+	while(true){
+		std::size_t i = 0;
+		if(!(std::cin >> i)){ break; }
+		i = (i - 1) * 2;
 		const std::vector<std::string> read_names = {
 			problem.read_names()[i + 0],
 			problem.read_names()[i + 1]
@@ -310,11 +315,11 @@ int main(int argc, char *argv[]){
 		const auto p = verify_solution(problem, i / 2, actual);
 		if(p.first){
 			dump_solution_info(
-				problem, read_names, read_sequences,
+				problem, references,
+				read_names, read_sequences,
 				problem.expected_solutions()[i / 2],
 				read_solution(actual[0], actual[1]));
 		}
-		if(argc == 3){ break; }
 	}
 #else
 	const auto align_begin_time = std::chrono::steady_clock::now();
@@ -329,8 +334,16 @@ int main(int argc, char *argv[]){
 		std::chrono::duration_cast<std::chrono::milliseconds>(
 			align_end_time - align_begin_time).count() * 1e-3;
 
+	sequencer = SubmissionWrapper();
+	std::array<std::string, 25> references;
+	for(const auto& p : problem.chromatids()){
+		std::ostringstream oss;
+		for(const auto& s : p.second){ oss << s; }
+		references[p.first] = oss.str();
+	}
+
 	problem.print_information(std::cout);
-	print_scores(problem, actual, preprocess_time, align_time);
+	print_scores(problem, references, actual, preprocess_time, align_time);
 #endif
 	return 0;
 }
