@@ -97,31 +97,37 @@ public:
 class ChromatidBlockMap {
 
 public:
-	using KeyValuePair = std::pair<uint64_t, uint32_t>;
-	using KeyValueIterator = std::vector<KeyValuePair>::const_iterator;
-	using KeyValueRange = std::pair<KeyValueIterator, KeyValueIterator>;
+	using ValueIterator = std::vector<uint32_t>::const_iterator;
+	using ValueRange = std::pair<ValueIterator, ValueIterator>;
 
 	static const int BLOCK_SIZE = 24;
 	static const int BLOCK_STEP = 12;
 
 private:
 	static const int JUMP_TABLE_DEPTH = 26;
-	std::vector<KeyValuePair> m_ordered_table;
+	std::vector<uint32_t> m_key_lower_table;
+	std::vector<uint32_t> m_range_offsets;
+	std::vector<uint32_t> m_positions;
 	std::vector<uint32_t> m_jump_table;
 
 public:
 	ChromatidBlockMap()
-		: m_ordered_table()
+		: m_key_lower_table()
+		, m_range_offsets()
+		, m_positions()
 		, m_jump_table()
 	{ }
 
 	ChromatidBlockMap(const CombinedChromatids& cc)
-		: m_ordered_table()
-		, m_jump_table((1 << JUMP_TABLE_DEPTH) + 1)
+		: m_key_lower_table()
+		, m_range_offsets()
+		, m_positions()
+		, m_jump_table()
 	{
 		const uint64_t hmask = (1ull << (BLOCK_SIZE * 2)) - 1;
 		const uint32_t n = cc.size();
-		m_ordered_table.reserve(n / BLOCK_SIZE);
+		std::vector<std::pair<uint64_t, uint32_t>> reorder_work;
+		reorder_work.reserve(n / BLOCK_SIZE);
 		for(uint32_t i = 0; i + BLOCK_SIZE <= n; i += BLOCK_STEP){
 			bool is_valid = true;
 			uint64_t h = 0;
@@ -134,39 +140,59 @@ public:
 				}
 			}
 			if(is_valid){
-				m_ordered_table.emplace_back(h, i);
+				reorder_work.emplace_back(h, i);
 			}
 		}
-		std::sort(m_ordered_table.begin(), m_ordered_table.end());
-		const uint32_t m = m_ordered_table.size();
-		std::fill(m_jump_table.begin(), m_jump_table.end(), 0xffffffffu);
-		m_jump_table[0] = 0;
+		std::sort(reorder_work.begin(), reorder_work.end());
+
+		const int key_shift = (BLOCK_SIZE * 2 - JUMP_TABLE_DEPTH);
+		const uint32_t lower_mask = (1u << key_shift) - 1u;
+		const uint32_t m = reorder_work.size();
+		uint32_t num_keys = 0;
 		for(uint32_t i = 0; i < m; ++i){
-			const int shift = (BLOCK_SIZE * 2) - JUMP_TABLE_DEPTH;
-			const uint32_t x = static_cast<uint32_t>(m_ordered_table[i].first >> shift);
-			if(i == 0 || (static_cast<uint32_t>(m_ordered_table[i - 1].first >> shift) != x)){
-				m_jump_table[x] = i;
+			if(i == 0 || reorder_work[i].first != reorder_work[i - 1].first){
+				++num_keys;
 			}
 		}
-		m_jump_table.back() = m;
+		m_key_lower_table = std::vector<uint32_t>(num_keys);
+		m_range_offsets = std::vector<uint32_t>(num_keys + 1);
+		m_positions = std::vector<uint32_t>(m);
+		m_jump_table = std::vector<uint32_t>((1 << JUMP_TABLE_DEPTH) + 1, 0xffffffffu);
+		for(uint32_t i = 0, j = 0; i < m; ++i){
+			const auto key = reorder_work[i].first;
+			if(i == 0 || key != reorder_work[i - 1].first){
+				if(i == 0 || (key >> key_shift) != (reorder_work[i - 1].first >> key_shift)){
+					m_jump_table[key >> key_shift] = j;
+				}
+				m_key_lower_table[j] = static_cast<uint32_t>(reorder_work[i].first & lower_mask);
+				m_range_offsets[j] = i;
+				++j;
+			}
+			m_positions[i] = reorder_work[i].second;
+		}
+		m_range_offsets.back() = m;
+		m_jump_table.back() = num_keys;
 		for(uint32_t i = (1 << JUMP_TABLE_DEPTH) - 1; i > 0; --i){
 			m_jump_table[i] = std::min(m_jump_table[i + 1], m_jump_table[i]);
 		}
+		m_jump_table[0] = 0;
 	}
 
-	KeyValueRange equal_range(uint64_t key) const {
+	ValueRange equal_range(uint64_t key) const {
 		const int shift = (BLOCK_SIZE * 2) - JUMP_TABLE_DEPTH;
 		const auto lo = m_jump_table[key >> shift];
 		const auto hi = m_jump_table[(key >> shift) + 1];
-		auto it = std::lower_bound(
-			m_ordered_table.begin() + lo,
-			m_ordered_table.begin() + hi,
-			KeyValuePair(key, 0));
-		auto jt = it;
-		if(it != m_ordered_table.end() && it->first == key){
-			while(jt != m_ordered_table.end() && jt->first == key){ ++jt; }
+		const uint32_t key_lower = static_cast<uint32_t>(key & ((1u << shift) - 1));
+		const auto begin = m_key_lower_table.begin() + lo;
+		const auto end = m_key_lower_table.begin() + hi;
+		const auto it = std::lower_bound(begin, end, key_lower);
+		if(it == end || *it != key_lower){
+			return std::make_pair(m_positions.begin(), m_positions.begin());
 		}
-		return std::make_pair(it, jt);
+		const auto idx = it - m_key_lower_table.begin();
+		return std::make_pair(
+			m_positions.begin() + m_range_offsets[idx],
+			m_positions.begin() + m_range_offsets[idx + 1]);
 	}
 
 };
@@ -253,7 +279,7 @@ private:
 			h = ((h << 2) | q[j]) & hmask;
 			const auto range = m_block_map.equal_range(h);
 			for(auto it = range.first; it != range.second; ++it){
-				result.push_back(it->second > i ? it->second - i : 0u);
+				result.push_back(*it > i ? *it - i : 0u);
 			}
 		}
 		return result;
@@ -275,6 +301,65 @@ private:
 		return result;
 	}
 
+	void prune_and_sort_block_matches(
+		std::vector<uint32_t>& hmatches,
+		std::vector<uint32_t>& tmatches) const
+	{
+		const int THRESHOLD = 20;
+		const int MIN_INTERVAL =  150;
+		const int MAX_INTERVAL = 1050;
+		const int n = hmatches.size(), m = tmatches.size();
+		if(n <= THRESHOLD && m <= THRESHOLD){
+			radix_sort(hmatches.data(), n);
+			radix_sort(tmatches.data(), m);
+		}else if(n <= THRESHOLD){
+			radix_sort(hmatches.data(), n);
+			int tail = m - 1;
+			for(int i = 0; i <= tail; ++i){
+				const uint32_t lo = tmatches[i] - MAX_INTERVAL;
+				const uint32_t hi = tmatches[i] - MIN_INTERVAL;
+				bool found = false;
+				for(const auto q : hmatches){
+					if(lo <= q && q < hi){
+						found = true;
+						break;
+					}
+				}
+				if(!found){
+					std::swap(tmatches[i], tmatches[tail]);
+					--i;
+					--tail;
+				}
+			}
+			tmatches.resize(tail + 1);
+			radix_sort(tmatches.data(), tmatches.size());
+		}else if(m <= THRESHOLD){
+			radix_sort(tmatches.data(), m);
+			int tail = n - 1;
+			for(int i = 0; i <= tail; ++i){
+				const uint32_t lo = hmatches[i] + MIN_INTERVAL;
+				const uint32_t hi = hmatches[i] + MAX_INTERVAL;
+				bool found = false;
+				for(const auto q : tmatches){
+					if(lo <= q && q < hi){
+						found = true;
+						break;
+					}
+				}
+				if(!found){
+					std::swap(hmatches[i], hmatches[tail]);
+					--i;
+					--tail;
+				}
+			}
+			hmatches.resize(tail + 1);
+			radix_sort(hmatches.data(), hmatches.size());
+		}else{
+			radix_sort(hmatches.data(), n);
+			radix_sort(tmatches.data(), m);
+		}
+	}
+
 	std::vector<CandidatePair> enumerate_candidates(
 		const std::vector<uint8_t>& head,
 		const std::vector<uint8_t>& tail,
@@ -289,8 +374,10 @@ private:
 			return std::vector<CandidatePair>();
 		}
 
-		radix_sort(hmatches.data(), hmatches.size());
-		radix_sort(tmatches.data(), tmatches.size());
+		prune_and_sort_block_matches(hmatches, tmatches);
+		if(hmatches.empty() || tmatches.empty()){
+			return std::vector<CandidatePair>();
+		}
 		const auto hblocks = merge_block_matches(hmatches);
 		const auto tblocks = merge_block_matches(tmatches);
 		const int n = hblocks.size(), m = tblocks.size();
@@ -343,7 +430,6 @@ private:
 		const int align = sh + st, interval = tpos - hpos;
 		const double n_align = align, n_interval = (interval - 450) * 0.005;
 		const double confidence = 1.0 / (1.0 + sqrt(n_align * n_align + n_interval * n_interval));
-//std::cout << ">> " << sh << " " << st << " " << interval << " => " << confidence << std::endl;
 		return confidence;
 	}
 
@@ -388,11 +474,6 @@ private:
 			std::vector<double> fine_confidences(n);
 			double fc_sum = 0.0;
 			for(int i = 0; i < n; ++i){
-/*
-const auto hpos = m_chromatids.translate(merged[i].head_position);
-const auto tpos = m_chromatids.translate(merged[i].tail_position);
-std::cout << hpos.first << ", " << hpos.second << ", " << tpos.second << " => " << x.weight << std::endl;
-*/
 				if(!merged[i].strand){
 					fine_confidences[i] = compute_fine_confidence(
 						merged[i], q.fragments(0), q.rev_fragments(1));
@@ -480,7 +561,7 @@ public:
 #pragma omp parallel for schedule(dynamic)
 		for(int i = 0; i < n; i += 2){
 #ifndef RUN_ONE_BY_ONE
-			if(i % 1000 == 0){ std::cout << i << " / " << n << std::endl; }
+			if(i % 10000 == 0){ std::cout << i << " / " << n << std::endl; }
 #endif
 			const Query q(read_sequence[i], read_sequence[i + 1]);
 			result[i / 2] = solve(q);
