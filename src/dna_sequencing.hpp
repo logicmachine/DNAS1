@@ -256,7 +256,6 @@ private:
 				result.push_back(it->second > i ? it->second - i : 0u);
 			}
 		}
-		radix_sort(result.data(), result.size());
 		return result;
 	}
 
@@ -283,8 +282,17 @@ private:
 	{
 		const uint32_t MIN_BLOCK_INTERVAL = 200u;
 		const uint32_t MAX_BLOCK_INTERVAL = 1000u;
-		const auto hblocks = merge_block_matches(enumerate_block_matches(head));
-		const auto tblocks = merge_block_matches(enumerate_block_matches(tail));
+
+		auto hmatches = enumerate_block_matches(head);
+		auto tmatches = enumerate_block_matches(tail);
+		if(hmatches.empty() || tmatches.empty()){
+			return std::vector<CandidatePair>();
+		}
+
+		radix_sort(hmatches.data(), hmatches.size());
+		radix_sort(tmatches.data(), tmatches.size());
+		const auto hblocks = merge_block_matches(hmatches);
+		const auto tblocks = merge_block_matches(tmatches);
 		const int n = hblocks.size(), m = tblocks.size();
 		std::vector<CandidatePair> result;
 		for(int i = 0, j = 0; i < n; ++i){
