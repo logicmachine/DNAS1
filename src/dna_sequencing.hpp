@@ -105,7 +105,7 @@ public:
 	static const int BLOCK_STEP = 12;
 
 private:
-	static const int JUMP_TABLE_DEPTH = 24;
+	static const int JUMP_TABLE_DEPTH = 26;
 	std::vector<KeyValuePair> m_ordered_table;
 	std::vector<uint32_t> m_jump_table;
 
@@ -201,6 +201,46 @@ private:
 	CombinedChromatids m_chromatids;
 	ChromatidBlockMap m_block_map;
 
+	template <typename T, int DEPTH = sizeof(T)>
+	void radix_sort(T *data, size_t n) const {
+		const size_t CACHE_BLOCK_SIZE = 64;
+		std::vector<T> work_buffer(n);
+		T cache[256][CACHE_BLOCK_SIZE];
+		size_t cached_count[256];
+		size_t offset[257];
+		T *cur = data, *next = work_buffer.data();
+		for(int d = 0; d < DEPTH; ++d){
+			const int shift = d * 8;
+			for(size_t i = 0; i <= 256; ++i){ offset[i] = 0; }
+			for(size_t i = 0; i < n; ++i){
+				++offset[static_cast<int>((cur[i] >> shift) & 0xff) + 1];
+			}
+			for(size_t i = 0; i < 256; ++i){
+				offset[i + 1] += offset[i];
+				cached_count[i] = 0;
+			}
+			for(size_t i = 0; i < n; ++i){
+				const auto g = static_cast<int>((cur[i] >> shift) & 0xff);
+				cache[g][cached_count[g]++] = cur[i];
+				if(cached_count[g] == CACHE_BLOCK_SIZE){
+					for(size_t j = 0; j < CACHE_BLOCK_SIZE; ++j){
+						next[offset[g]++] = cache[g][j];
+					}
+					cached_count[g] = 0;
+				}
+			}
+			for(size_t g = 0; g < 256; ++g){
+				for(size_t j = 0; j < cached_count[g]; ++j){
+					next[offset[g]++] = cache[g][j];
+				}
+			}
+			std::swap(cur, next);
+		}
+		if(DEPTH & 1){
+			for(size_t i = 0; i < n; ++i){ next[i] = cur[i]; }
+		}
+	}
+
 	std::vector<uint32_t> enumerate_block_matches(const std::vector<uint8_t>& q) const {
 		const int BLOCK_SIZE = ChromatidBlockMap::BLOCK_SIZE;
 		const uint64_t hmask = (1ull << (BLOCK_SIZE * 2)) - 1;
@@ -216,7 +256,7 @@ private:
 				result.push_back(it->second > i ? it->second - i : 0u);
 			}
 		}
-		std::sort(result.begin(), result.end());
+		radix_sort(result.data(), result.size());
 		return result;
 	}
 
@@ -429,9 +469,7 @@ public:
 		std::vector<std::string> read_sequence)
 	{
 		std::vector<Solution> result(n / 2);
-#ifndef _OPENMP
 #pragma omp parallel for schedule(dynamic)
-#endif
 		for(int i = 0; i < n; i += 2){
 #ifndef RUN_ONE_BY_ONE
 			if(i % 1000 == 0){ std::cout << i << " / " << n << std::endl; }

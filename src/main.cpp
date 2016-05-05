@@ -182,10 +182,10 @@ static void dump_solution_info(
 			sub_ex, pe.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
 		const auto sw_ac = smith_waterman(
 			sub_ac, pa.is_reversed ? reverse_complement(seq) : seq, 1, 1, 1);
-		std::cout << "  + " << pe.start << ", " << pe.end << ", " << pe.is_reversed << std::endl;
+		std::cout << "  + " << ex.chromatid_id() << ": " << pe.start << ", " << pe.end << ", " << pe.is_reversed << std::endl;
 		std::cout << "    " << std::get<1>(sw_ex) << std::endl;
 		std::cout << "    " << std::get<2>(sw_ex) << std::endl;
-		std::cout << "  - " << pa.start << ", " << pa.end << ", " << pa.is_reversed << std::endl;
+		std::cout << "  - " << ac.chromatid_id() << ": " << pa.start << ", " << pa.end << ", " << pa.is_reversed << std::endl;
 		std::cout << "    " << std::get<1>(sw_ac) << std::endl;
 		std::cout << "    " << std::get<2>(sw_ac) << std::endl;
 		std::cout << "  ? " << std::get<0>(sw_ex) << " / " << std::get<0>(sw_ac) << std::endl;
@@ -216,6 +216,7 @@ static int print_scores(
 			problem, i, { actual[i * 2], actual[i * 2 + 1] });
 		const auto fail = p.first;
 		const auto& ac = p.second;
+		const auto& ex = expected[i];
 		if(!fail){
 			correct_count += 2;
 			verify_results.emplace_back(ac.confidence(), 1);
