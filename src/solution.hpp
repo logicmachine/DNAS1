@@ -15,7 +15,7 @@ public:
 
 		Position()
 			: start(0)
-			, end(0)
+			, end(1)
 			, is_reversed(false)
 		{ }
 
@@ -33,7 +33,7 @@ private:
 
 public:
 	Solution()
-		: m_chromatid_id(0)
+		: m_chromatid_id(20)
 		, m_confidence(0.0)
 		, m_positions()
 	{ }
