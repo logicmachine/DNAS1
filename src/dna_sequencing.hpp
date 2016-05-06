@@ -100,11 +100,11 @@ public:
 	using ValueIterator = std::vector<uint32_t>::const_iterator;
 	using ValueRange = std::pair<ValueIterator, ValueIterator>;
 
-	static const int BLOCK_SIZE = 24;
-	static const int BLOCK_STEP = 12;
+	static const int BLOCK_SIZE = 26;
+	static const int BLOCK_STEP = 13;
 
 private:
-	static const int JUMP_TABLE_DEPTH = 26;
+	static const int JUMP_TABLE_DEPTH = 30;
 	std::vector<uint32_t> m_key_lower_table;
 	std::vector<uint32_t> m_range_offsets;
 	std::vector<uint32_t> m_positions;
@@ -229,6 +229,10 @@ private:
 
 	template <typename T, int DEPTH = sizeof(T)>
 	void radix_sort(T *data, size_t n) const {
+		if(n < 256){
+			std::sort(data, data + n);
+			return;
+		}
 		const size_t CACHE_BLOCK_SIZE = 64;
 		std::vector<T> work_buffer(n);
 		T cache[256][CACHE_BLOCK_SIZE];
