@@ -110,6 +110,44 @@ private:
 	std::vector<uint32_t> m_positions;
 	std::vector<uint32_t> m_jump_table;
 
+	size_t select_pivot(const uint64_t *keys, size_t n) const {
+		const auto a = keys[0], b = keys[n / 2], c = keys[n - 1];
+		const auto median = a + b + c - std::min({ a, b, c }) - std::max({ a, b, c });
+		if(a == median){ return 0; }
+		if(b == median){ return n / 2; }
+		return n - 1;
+	}
+
+	void key_value_sort(
+		uint64_t *keys, uint32_t *values, size_t n) const
+	{
+		if(n <= 1){ return; }
+		if(n == 2){
+			if(keys[0] > keys[1]){
+				std::swap(  keys[0],   keys[1]);
+				std::swap(values[0], values[1]);
+			}
+			return;
+		}
+		const auto pivot_index = select_pivot(keys, n);
+		std::swap(  keys[pivot_index],   keys[n - 1]);
+		std::swap(values[pivot_index], values[n - 1]);
+		const auto x = keys[n - 1];
+		size_t i = static_cast<size_t>(-1);
+		for(size_t j = 0; j < n - 1; ++j){
+			if(keys[j] <= x){
+				++i;
+				std::swap(  keys[i],   keys[j]);
+				std::swap(values[i], values[j]);
+			}
+		}
+		++i;
+		std::swap(  keys[i],   keys[n - 1]);
+		std::swap(values[i], values[n - 1]);
+		key_value_sort(keys, values, i);
+		key_value_sort(keys + i + 1, values + i + 1, n - (i + 1));
+	}
+
 public:
 	ChromatidBlockMap()
 		: m_key_lower_table()
@@ -126,8 +164,9 @@ public:
 	{
 		const uint64_t hmask = (4ull << (BLOCK_SIZE * 2)) - 1;
 		const uint32_t n = cc.size();
-		std::vector<std::pair<uint64_t, uint32_t>> reorder_work;
-		reorder_work.reserve(n / BLOCK_STEP);
+		std::vector<uint64_t> key_work;
+		key_work.reserve(n * 2 / BLOCK_STEP);
+		m_positions.reserve(n * 2 / BLOCK_STEP);
 		for(uint32_t i = 0; i + BLOCK_SIZE + 1 <= n; i += BLOCK_STEP){
 			bool is_valid = true;
 			uint64_t h = 0;
@@ -140,52 +179,54 @@ public:
 				}
 			}
 			if(is_valid){
-				reorder_work.emplace_back(h >> 2, i);
-				reorder_work.emplace_back(h & (hmask >> 2), i);
+				key_work.push_back(h >> 2);
+				m_positions.push_back(i);
+				key_work.push_back(h & (hmask >> 2));
+				m_positions.push_back(i);
 			}
 		}
-		std::sort(reorder_work.begin(), reorder_work.end());
-		uint32_t tail = 0;
-		for(uint32_t i = 0; i < reorder_work.size(); ){
-			uint32_t j = i;
-			while(j < reorder_work.size()){
-				if(reorder_work[i].first != reorder_work[j].first){ break; }
-				++j;
-			}
+		key_work.shrink_to_fit();
+		m_positions.shrink_to_fit();
+		key_value_sort(key_work.data(), m_positions.data(), key_work.size());
+
+		size_t tail = 0;
+		for(size_t i = 0; i < key_work.size(); ){
+			size_t j = i;
+			while(j < key_work.size() && key_work[i] == key_work[j]){ ++j; }
 			if(j - i < 2500){
 				for(uint32_t k = i; k < j; ++k){
-					reorder_work[tail++] = reorder_work[k];
+					key_work[tail]    = key_work[k];
+					m_positions[tail] = m_positions[k];
+					++tail;
 				}
 			}
 			i = j;
 		}
-		reorder_work.resize(tail);
-		reorder_work.shrink_to_fit();
+		key_work.resize(tail);
+		key_work.shrink_to_fit();
+		m_positions.resize(tail);
+		m_positions.shrink_to_fit();
 
 		const int key_shift = (BLOCK_SIZE * 2 - JUMP_TABLE_DEPTH);
 		const uint32_t lower_mask = (1u << key_shift) - 1u;
-		const uint32_t m = reorder_work.size();
+		const uint32_t m = key_work.size();
 		uint32_t num_keys = 0;
 		for(uint32_t i = 0; i < m; ++i){
-			if(i == 0 || reorder_work[i].first != reorder_work[i - 1].first){
-				++num_keys;
-			}
+			if(i == 0 || key_work[i] != key_work[i - 1]){ ++num_keys; }
 		}
 		m_key_lower_table = std::vector<uint32_t>(num_keys);
 		m_range_offsets = std::vector<uint32_t>(num_keys + 1);
-		m_positions = std::vector<uint32_t>(m);
 		m_jump_table = std::vector<uint32_t>((1 << JUMP_TABLE_DEPTH) + 1, 0xffffffffu);
 		for(uint32_t i = 0, j = 0; i < m; ++i){
-			const auto key = reorder_work[i].first;
-			if(i == 0 || key != reorder_work[i - 1].first){
-				if(i == 0 || (key >> key_shift) != (reorder_work[i - 1].first >> key_shift)){
+			const auto key = key_work[i];
+			if(i == 0 || key != key_work[i - 1]){
+				if(i == 0 || (key >> key_shift) != (key_work[i - 1] >> key_shift)){
 					m_jump_table[key >> key_shift] = j;
 				}
-				m_key_lower_table[j] = static_cast<uint32_t>(reorder_work[i].first & lower_mask);
+				m_key_lower_table[j] = static_cast<uint32_t>(key_work[i] & lower_mask);
 				m_range_offsets[j] = i;
 				++j;
 			}
-			m_positions[i] = reorder_work[i].second;
 		}
 		m_range_offsets.back() = m;
 		m_jump_table.back() = num_keys;
