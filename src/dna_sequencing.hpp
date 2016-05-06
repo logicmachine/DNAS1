@@ -100,7 +100,7 @@ public:
 	using ValueIterator = std::vector<uint32_t>::const_iterator;
 	using ValueRange = std::pair<ValueIterator, ValueIterator>;
 
-	static const int BLOCK_SIZE = 26;
+	static const int BLOCK_SIZE = 25;
 	static const int BLOCK_STEP = 13;
 
 private:
@@ -109,13 +109,6 @@ private:
 	std::vector<uint32_t> m_range_offsets;
 	std::vector<uint32_t> m_positions;
 	std::vector<uint32_t> m_jump_table;
-
-	uint32_t hash(uint64_t x) const {
-		const uint32_t mask = (1u << BLOCK_SIZE) - 1u;
-		const auto x_lo = (x & mask) * 481972731u;
-		const auto x_hi = (x >> BLOCK_SIZE) * 981823192u;
-		return (x_lo ^ x_hi) & mask;
-	}
 
 public:
 	ChromatidBlockMap()
@@ -131,14 +124,14 @@ public:
 		, m_positions()
 		, m_jump_table()
 	{
-		const uint64_t hmask = (1ull << (BLOCK_SIZE * 2)) - 1;
+		const uint64_t hmask = (4ull << (BLOCK_SIZE * 2)) - 1;
 		const uint32_t n = cc.size();
 		std::vector<std::pair<uint64_t, uint32_t>> reorder_work;
-		reorder_work.reserve(n / BLOCK_SIZE);
-		for(uint32_t i = 0; i + BLOCK_SIZE <= n; i += BLOCK_STEP){
+		reorder_work.reserve(n / BLOCK_STEP);
+		for(uint32_t i = 0; i + BLOCK_SIZE + 1 <= n; i += BLOCK_STEP){
 			bool is_valid = true;
 			uint64_t h = 0;
-			for(uint32_t j = 0; is_valid && j < BLOCK_SIZE; ++j){
+			for(uint32_t j = 0; is_valid && j <= BLOCK_SIZE; ++j){
 				const auto x = cc[i + j];
 				if(x == CombinedChromatids::N){
 					is_valid = false;
@@ -147,10 +140,27 @@ public:
 				}
 			}
 			if(is_valid){
-				reorder_work.emplace_back(h, i);
+				reorder_work.emplace_back(h >> 2, i);
+				reorder_work.emplace_back(h & (hmask >> 2), i);
 			}
 		}
 		std::sort(reorder_work.begin(), reorder_work.end());
+		uint32_t tail = 0;
+		for(uint32_t i = 0; i < reorder_work.size(); ){
+			uint32_t j = i;
+			while(j < reorder_work.size()){
+				if(reorder_work[i].first != reorder_work[j].first){ break; }
+				++j;
+			}
+			if(j - i < 2500){
+				for(uint32_t k = i; k < j; ++k){
+					reorder_work[tail++] = reorder_work[k];
+				}
+			}
+			i = j;
+		}
+		reorder_work.resize(tail);
+		reorder_work.shrink_to_fit();
 
 		const int key_shift = (BLOCK_SIZE * 2 - JUMP_TABLE_DEPTH);
 		const uint32_t lower_mask = (1u << key_shift) - 1u;
@@ -288,9 +298,11 @@ private:
 		for(int i = 0; i + BLOCK_SIZE <= n; ++i){
 			const auto j = i + BLOCK_SIZE - 1;
 			h = ((h << 2) | q[j]) & hmask;
-			const auto range = m_block_map.equal_range(h);
-			for(auto it = range.first; it != range.second; ++it){
-				result.push_back(*it > i ? *it - i : 0u);
+			if(i % 2 == 0){
+				const auto range = m_block_map.equal_range(h);
+				for(auto it = range.first; it != range.second; ++it){
+					result.push_back(*it - i);
+				}
 			}
 		}
 		return result;
