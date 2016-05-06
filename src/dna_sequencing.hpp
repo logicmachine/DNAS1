@@ -104,7 +104,7 @@ public:
 	static const int BLOCK_STEP = 13;
 
 private:
-	static const int JUMP_TABLE_DEPTH = 30;
+	static const int JUMP_TABLE_DEPTH = 29;
 	std::vector<uint32_t> m_key_lower_table;
 	std::vector<uint32_t> m_range_offsets;
 	std::vector<uint32_t> m_positions;
