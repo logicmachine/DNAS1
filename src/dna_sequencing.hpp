@@ -110,6 +110,13 @@ private:
 	std::vector<uint32_t> m_positions;
 	std::vector<uint32_t> m_jump_table;
 
+	uint32_t hash(uint64_t x) const {
+		const uint32_t mask = (1u << BLOCK_SIZE) - 1u;
+		const auto x_lo = (x & mask) * 481972731u;
+		const auto x_hi = (x >> BLOCK_SIZE) * 981823192u;
+		return (x_lo ^ x_hi) & mask;
+	}
+
 public:
 	ChromatidBlockMap()
 		: m_key_lower_table()
@@ -373,10 +380,9 @@ private:
 		const uint32_t MAX_BLOCK_INTERVAL = 1000u;
 
 		auto hmatches = enumerate_block_matches(head);
+		if(hmatches.empty()){ return std::vector<CandidatePair>(); }
 		auto tmatches = enumerate_block_matches(tail);
-		if(hmatches.empty() || tmatches.empty()){
-			return std::vector<CandidatePair>();
-		}
+		if(tmatches.empty()){ return std::vector<CandidatePair>(); }
 
 		prune_and_sort_block_matches(hmatches, tmatches);
 		if(hmatches.empty() || tmatches.empty()){
